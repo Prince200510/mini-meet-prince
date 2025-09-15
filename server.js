@@ -24,18 +24,39 @@ app.use(cors({
 }));
 
 io.on("connection", socket => {
-  console.log("socket connected", socket.id);
+  console.log("Socket connected:", socket.id);
 
   socket.on("join-room", (roomId) => {
+    console.log(`Socket ${socket.id} joined room ${roomId}`);
     socket.join(roomId);
     socket.to(roomId).emit("peer-joined", socket.id);
-    socket.on("offer", (data) => socket.to(roomId).emit("offer", {...data, from: socket.id}));
-    socket.on("answer", (data) => socket.to(roomId).emit("answer", {...data, from: socket.id}));
-    socket.on("candidate", (data) => socket.to(roomId).emit("candidate", {...data, from: socket.id}));
-    socket.on("wb-fallback", (data) => socket.to(roomId).emit("wb-fallback", data));
-    socket.on("disconnect", () => socket.to(roomId).emit("peer-left", socket.id));
+
+    socket.on("offer", (data) => {
+      console.log(`Offer received from ${socket.id} for room ${roomId}`);
+      socket.to(roomId).emit("offer", {...data, from: socket.id});
+    });
+
+    socket.on("answer", (data) => {
+      console.log(`Answer received from ${socket.id} for room ${roomId}`);
+      socket.to(roomId).emit("answer", {...data, from: socket.id});
+    });
+
+    socket.on("candidate", (data) => {
+      console.log(`Candidate received from ${socket.id} for room ${roomId}`);
+      socket.to(roomId).emit("candidate", {...data, from: socket.id});
+    });
+
+    socket.on("wb-fallback", (data) => {
+      console.log(`Whiteboard fallback message from ${socket.id} in room ${roomId}`);
+      socket.to(roomId).emit("wb-fallback", data);
+    });
+
+    socket.on("disconnect", () => {
+      console.log(`Socket ${socket.id} disconnected from room ${roomId}`);
+      socket.to(roomId).emit("peer-left", socket.id);
+    });
   });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, ()=> console.log("Server:", PORT));
+server.listen(PORT, () => console.log("Server running on port", PORT));
