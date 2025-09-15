@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mini Meet - Lightweight P2P Video Conferencing</title>
+<meta name="description" content="Secure peer-to-peer video conferencing with whiteboard and chat features" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="container animate-fade-in">
+    <h3>✨ Mini Meet — Lightweight P2P</h3>
+    
+    <div class="room-controls animate-slide-in-left">
+      <label>🏠 Room ID: 
+        <input id="roomInput" type="text" placeholder="Enter room ID or leave blank to create" />
+      </label>
+      <button id="createBtn" class="btn btn-primary">🚀 Create / Get Link</button>
+      <a id="shareLink" href="#" style="display: none;">📋 Share this link</a>
+    </div>
+
+    <div id="videos" class="animate-slide-in-right">
+      <div class="video-container">
+        <video id="localVid" autoplay playsinline muted></video>
+        <div class="video-label">📹 You</div>
+      </div>
+      <div class="video-container">
+        <video id="remoteVid" autoplay playsinline></video>
+        <div class="video-label">👥 Peer</div>
+      </div>
+    </div>
+
+    <div id="controls" class="animate-fade-in">
+      <button id="startBtn" class="btn btn-success">▶️ Start / Join</button>
+      <button id="muteBtn" class="btn btn-secondary">🎤 Mute</button>
+      <button id="camBtn" class="btn btn-secondary">📹 Camera Off</button>
+      <button id="screenBtn" class="btn btn-secondary">🖥️ Share Screen</button>
+      <button id="recBtn" class="btn btn-warning">⏺️ Start Recording</button>
+      <label class="checkbox-label">
+        <input type="checkbox" id="audioOnly"> 
+        🎵 Audio Only Mode
+      </label>
+    </div>
+
+    <div class="chat-section">
+      <div id="chat" class="animate-fade-in"></div>
+      <div id="chatControls">
+        <input id="msgInput" type="text" placeholder="💬 Type your message..." />
+        <button id="sendMsg" class="btn btn-primary">📤 Send</button>
+      </div>
+    </div>
+
+    <div class="whiteboard-section">
+      <div id="whiteboardTools" class="animate-slide-in-left">
+        <button id="drawTool" class="btn active-tool">✏️ Draw</button>
+        <button id="eraseTool" class="btn">🧹 Eraser</button>
+        <button id="rectTool" class="btn">⬜ Rectangle</button>
+        <button id="circleTool" class="btn">⭕ Circle</button>
+        <button id="lineTool" class="btn">📏 Line</button>
+        <button id="clearTool" class="btn btn-danger">🗑️ Clear All</button>
+      </div>
+      <div class="whiteboard-container">
+        <canvas id="whiteboard" width="600" height="400"></canvas>
+        <div class="whiteboard-instructions">
+          💡 <strong>Tip:</strong> Use the tools above to collaborate on the whiteboard. Your drawings will be shared in real-time!
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+
+<script>
+const BACKEND_URL = window.location.hostname === 'localhost' 
+  ? 'http://localhost:3000' 
+  : 'https://mini-meet-prince.onrender.app';
+
+let socket = io(BACKEND_URL);
+
+let localStream, pc, roomId, dataChannel;
+let recordedChunks = [], recorder;
+let isMuted = false, isCamOff = false;
+let tool = 'draw';
+let drawing = false;
+let erasing = false;
+let shapeStart = null;
+let last = null;
+
+const STUN = [{ urls: "stun:stun.l.google.com:19302" }];
+
+const roomInput = document.getElementById("roomInput");
+const createBtn = document.getElementById("createBtn");
+const shareLink = document.getElementById("shareLink");
+const startBtn = document.getElementById("startBtn");
+const muteBtn = document.getElementById("muteBtn");
+const camBtn = document.getElementById("camBtn");
+const screenBtn = document.getElementById("screenBtn");
+const recBtn = document.getElementById("recBtn");
+const audioOnly = document.getElementById("audioOnly");
+const localVid = document.getElementById("localVid");
+const remoteVid = document.getElementById("remoteVid");
+const chatBox = document.getElementById("chat");
+const msgInput = document.getElementById("msgInput");
+const sendMsg = document.getElementById("sendMsg");
+const canvas = document.getElementById("whiteboard");
+const ctx = canvas.getContext("2d");
+const drawTool = document.getElementById('drawTool');
+const eraseTool = document.getElementById('eraseTool');
+const rectTool = document.getElementById('rectTool');
+const circleTool = document.getElementById('circleTool');
+const lineTool = document.getElementById('lineTool');
+const clearTool = document.getElementById('clearTool');
+
+function setActiveTool(selectedTool) {
+  [drawTool, eraseTool, rectTool, circleTool, lineTool].forEach(btn => {
+    btn.classList.remove('active-tool');
+  });
+  selectedTool.classList.add('active-tool');
+}
+
+drawTool.onclick = () => { tool = 'draw'; setActiveTool(drawTool); };
+eraseTool.onclick = () => { tool = 'erase'; setActiveTool(eraseTool); };
+rectTool.onclick = () => { tool = 'rect'; setActiveTool(rectTool); };
+circleTool.onclick = () => { tool = 'circle'; setActiveTool(circleTool); };
+lineTool.onclick = () => { tool = 'line'; setActiveTool(lineTool); };
+clearTool.onclick = () => clearWhiteboard();
+
+muteBtn.onclick = () => {
+  if (!localStream) return;
+  const audioTracks = localStream.getAudioTracks();
+  if (audioTracks.length === 0) return;
+  isMuted = !isMuted;
+  audioTracks.forEach(track => track.enabled = !isMuted);
+  muteBtn.textContent = isMuted ? "🔇 Unmute" : "🎤 Mute";
+  muteBtn.classList.toggle('muted', isMuted);
+};
+
+camBtn.onclick = () => {
+  if (!localStream) return;
+  const videoTracks = localStream.getVideoTracks();
+  if (videoTracks.length === 0) return;
+  isCamOff = !isCamOff;
+  videoTracks.forEach(track => track.enabled = !isCamOff);
+  camBtn.textContent = isCamOff ? "📹 Camera On" : "📹 Camera Off";
+  camBtn.classList.toggle('muted', isCamOff);
+  localVid.style.display = isCamOff ? "none" : "block";
+};
+
+createBtn.onclick = async () => {
+  createBtn.classList.add('loading');
+  roomId = roomInput.value || Math.random().toString(36).slice(2,9);
+  const url = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
+  shareLink.href = url;
+  shareLink.textContent = "📋 Share this link";
+  shareLink.target = "_blank";
+  shareLink.style.display = "inline-block";
+  roomInput.value = roomId;
+
+  try {
+    await startLocalMedia();
+    initPeerConnection();
+    socket.emit("join-room", roomId);
+    appendChat("[✅ System] Room created successfully! Share the link to invite others.");
+  } catch (error) {
+    appendChat("[❌ System] Error creating room: " + error.message);
+  } finally {
+    createBtn.classList.remove('loading');
+  }
+};
+
+(function maybeJoinFromQuery(){
+  const params = new URLSearchParams(location.search);
+  if (params.get("room")) {
+    roomId = params.get("room");
+    roomInput.value = roomId;
+    shareLink.style.display = "inline-block";
+    shareLink.href = window.location.href;
+    shareLink.textContent = "📋 Share this link";
+    shareLink.target = "_blank";
+  }
+})();
+
+startBtn.onclick = async () => {
+  if (!roomId) { 
+    alert("⚠️ Please create a room first or enter a room ID"); 
+    return; 
+  }
+  startBtn.classList.add('loading');
+  try {
+    await startLocalMedia();
+    initPeerConnection();
+    socket.emit("join-room", roomId);
+    appendChat("[✅ System] Joined room successfully! Waiting for peers to connect.");
+    startBtn.textContent = "✅ Connected";
+    startBtn.disabled = true;
+  } catch (error) {
+    appendChat("[❌ System] Error joining room: " + error.message);
+  } finally {
+    startBtn.classList.remove('loading');
+  }
+};
+
+async function startLocalMedia(){
+  const constraints = audioOnly.checked ? { audio: true, video: false } : {
+    audio: true,
+    video: { width:320, height:240, frameRate:15 }
+  };
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    localVid.srcObject = localStream;
+    appendChat("[📹 System] Camera and microphone access granted.");
+  } catch(e) {
+    appendChat("[❌ System] Unable to get camera/mic: " + e.message);
+    throw e;
+  }
+}
+
+function initPeerConnection(){
+  pc = new RTCPeerConnection({ iceServers: STUN });
+
+  if (localStream) {
+    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+  }
+
+  pc.ontrack = e => {
+    if (e.streams && e.streams[0]) {
+      remoteVid.srcObject = e.streams[0];
+      remoteVid.style.display = "block";
+      appendChat("[👥 System] Peer connected! You can now see and hear each other.");
+    } else {
+      console.warn("No streams found in ontrack event");
+    }
+  };
+
+  pc.onicecandidate = e => {
+    if (e.candidate) socket.emit("candidate", e.candidate);
+  };
+
+  dataChannel = pc.createDataChannel("messaging");
+  setupDataChannel();
+  pc.ondatachannel = (event) => {
+    dataChannel = event.channel;
+    setupDataChannel();
+  };
+
+  socket.on("offer", async (data) => {
+    if (!pc) initPeerConnection();
+    await pc.setRemoteDescription(new RTCSessionDescription(data));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit("answer", answer);
+  });
+
+  socket.on("answer", async (data) => {
+    if (!pc) return;
+    await pc.setRemoteDescription(new RTCSessionDescription(data));
+  });
+
+  socket.on("candidate", async (cand) => {
+    try { if (pc) await pc.addIceCandidate(new RTCIceCandidate(cand)); }
+    catch(e){ console.warn("ICE add error", e); }
+  });
+
+  socket.on("peer-joined", async () => {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit("offer", offer);
+    appendChat("[🔄 System] New peer joining, establishing connection...");
+  });
+
+  socket.on("peer-left", ()=> {
+    console.log("Peer left");
+    appendChat("[👋 System] Peer has left the meeting.");
+    remoteVid.srcObject = null;
+  });
+}
+
+function setupDataChannel(){
+  if (!dataChannel) return;
+  dataChannel.onopen = () => appendChat("[🔗 System] Real-time messaging enabled");
+  dataChannel.onmessage = (evt) => {
+    try {
+      const msg = JSON.parse(evt.data);
+      if (msg.type === "wb") drawRemoteStroke(msg);
+      if (msg.type === "erase") drawRemoteErase(msg);
+      if (msg.type === "shape") drawShape(msg.a, msg.b, msg.shape, false);
+      if (msg.type === "clear") {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        appendChat("[🗑️ System] Whiteboard cleared by peer");
+      }
+      if (msg.type === "chat") appendChat("👥 " + msg.from + ": " + msg.text);
+    } catch(e) {
+      console.warn("DataChannel message error:", e);
+    }
+  };
+}
+
+sendMsg.onclick = sendMessage;
+msgInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') sendMessage();
+});
+
+function sendMessage() {
+  const text = msgInput.value.trim(); 
+  if (!text) return;
+  appendChat("📤 Me: " + text);
+  const payload = JSON.stringify({ type:"chat", from: "Peer", text });
+  if (dataChannel && dataChannel.readyState === "open") {
+    dataChannel.send(payload);
+  } else {
+    socket.emit("wb-fallback", { type:"chat", text, room: roomId });
+  }
+  msgInput.value = "";
+}
+
+socket.on("wb-fallback", (d) => {
+  if (d.type === "chat") appendChat("👥 Peer: " + d.text);
+  if (d.type === "wb") drawRemoteStroke(d);
+  if (d.type === "erase") drawRemoteErase(d);
+  if (d.type === "shape") drawShape(d.a, d.b, d.shape, false);
+  if (d.type === "clear") {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    appendChat("[🗑️ System] Whiteboard cleared by peer");
+  }
+});
+
+function pos(e){ 
+  const r = canvas.getBoundingClientRect(); 
+  const scaleX = canvas.width / r.width; 
+  const scaleY = canvas.height / r.height; 
+  return { x: (e.clientX - r.left) * scaleX, y: (e.clientY - r.top) * scaleY }; 
+}
+
+function stroke(a, b){
+  ctx.save();
+  ctx.lineWidth = 3; 
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "#6366f1";
+  ctx.beginPath(); 
+  ctx.moveTo(a.x, a.y); 
+  ctx.lineTo(b.x, b.y); 
+  ctx.stroke();
+  ctx.restore();
+  const strokeMsg = { type:"wb", stroke:[a, b] };
+  sendWhiteboardMessage(strokeMsg);
+}
+
+function drawRemoteStroke(msg){
+  if (!msg.stroke) return;
+  const [a, b] = msg.stroke;
+  ctx.save();
+  ctx.lineWidth = 3; 
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "#ef4444";
+  ctx.beginPath(); 
+  ctx.moveTo(a.x, a.y); 
+  ctx.lineTo(b.x, b.y); 
+  ctx.stroke();
+  ctx.restore();
+}
+
+function eraseAt(p) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 15, 0, 2 * Math.PI);
+  ctx.fill();
+  ctx.restore();
+  const eraseMsg = { type: 'erase', x: p.x, y: p.y, r: 15 };
+  sendWhiteboardMessage(eraseMsg);
+}
+
+function drawRemoteErase(msg) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath();
+  ctx.arc(msg.x, msg.y, msg.r || 15, 0, 2 * Math.PI);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawShape(a, b, shape, broadcast) {
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = broadcast ? "#6366f1" : "#10b981";
+  
+  if (shape === 'rect') {
+    ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+  } else if (shape === 'circle') {
+    const r = Math.sqrt(Math.pow(b.x - a.x, 2) + Math.pow(b.y - a.y, 2));
+    ctx.beginPath(); 
+    ctx.arc(a.x, a.y, r, 0, 2 * Math.PI); 
+    ctx.stroke();
+  } else if (shape === 'line') {
+    ctx.beginPath(); 
+    ctx.moveTo(a.x, a.y); 
+    ctx.lineTo(b.x, b.y); 
+    ctx.stroke();
+  }
+  ctx.restore();
+  
+  if (broadcast) {
+    const shapeMsg = { type: 'shape', shape, a, b };
+    sendWhiteboardMessage(shapeMsg);
+  }
+}
+
+function clearWhiteboard() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const clearMsg = { type: 'clear' };
+  sendWhiteboardMessage(clearMsg);
+  appendChat("[🗑️ System] Whiteboard cleared");
+}
+
+function sendWhiteboardMessage(msg) {
+  const payload = JSON.stringify(msg);
+  if (dataChannel && dataChannel.readyState === "open") {
+    dataChannel.send(payload);
+  }
+  if (roomId) {
+    socket.emit("wb-fallback", { room: roomId, ...msg });
+  }
+}
+
+canvas.addEventListener("pointerdown", e => {
+  const p = pos(e);
+  canvas.classList.add('drawing');
+  if (tool === 'draw') {
+    drawing = true; 
+    last = p;
+  } else if (tool === 'erase') {
+    erasing = true; 
+    eraseAt(p);
+  } else if (['rect', 'circle', 'line'].includes(tool)) {
+    drawing = true; 
+    shapeStart = p;
+  }
+});
+
+canvas.addEventListener("pointermove", e => {
+  const p = pos(e);
+  if (tool === 'draw' && drawing && last) {
+    stroke(last, p);
+    last = p;
+  } else if (tool === 'erase' && erasing) {
+    eraseAt(p);
+  }
+});
+
+canvas.addEventListener("pointerup", e => {
+  canvas.classList.remove('drawing');
+  if (tool === 'draw') {
+    drawing = false; 
+    last = null;
+  } else if (tool === 'erase') {
+    erasing = false;
+  } else if (['rect', 'circle', 'line'].includes(tool) && drawing && shapeStart) {
+    const p = pos(e);
+    drawShape(shapeStart, p, tool, true);
+    drawing = false; 
+    shapeStart = null;
+  }
+});
+
+canvas.addEventListener("pointercancel", () => { 
+  canvas.classList.remove('drawing');
+  drawing = false; 
+  erasing = false; 
+  last = null; 
+  shapeStart = null; 
+});
+
+function appendChat(txt){ 
+  const div = document.createElement('div');
+  div.innerHTML = txt;
+  div.className = 'animate-fade-in';
+  chatBox.appendChild(div);
+  chatBox.scrollTop = chatBox.scrollHeight; 
+}
+
+screenBtn.onclick = async () => {
+  if (!pc) { alert("⚠️ Start meeting first"); return; }
+  screenBtn.classList.add('loading');
+  try {
+    const screenStream = await navigator.mediaDevices.getDisplayMedia({video:true});
+    const track = screenStream.getTracks()[0];
+    const senders = pc.getSenders();
+    const sender = senders.find(s => s.track && s.track.kind === 'video');
+    if (sender) sender.replaceTrack(track);
+    
+    screenBtn.textContent = "🛑 Stop Sharing";
+    screenBtn.classList.add('muted');
+    appendChat("[🖥️ System] Screen sharing started");
+    
+    track.onended = async () => {
+      const camTrack = localStream.getVideoTracks()[0];
+      if (sender && camTrack) sender.replaceTrack(camTrack);
+      screenBtn.textContent = "🖥️ Share Screen";
+      screenBtn.classList.remove('muted');
+      appendChat("[🖥️ System] Screen sharing stopped");
+    };
+  } catch(e) { 
+    alert("❌ Screen share failed: " + e.message); 
+    appendChat("[❌ System] Screen share failed: " + e.message);
+  } finally {
+    screenBtn.classList.remove('loading');
+  }
+};
+
+recBtn.onclick = () => {
+  if (!localStream) return alert("⚠️ Start media first");
+  if (!recorder || recorder.state === "inactive") {
+    recordedChunks = [];
+    recorder = new MediaRecorder(localStream, { mimeType: "video/webm; codecs=vp8,opus" });
+    recorder.ondataavailable = e => { if (e.data.size) recordedChunks.push(e.data); };
+    recorder.onstop = () => {
+      const blob = new Blob(recordedChunks, { type: "video/webm" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; 
+      a.download = `mini-meet-recording-${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.webm`; 
+      a.click();
+      appendChat("[💾 System] Recording saved successfully!");
+    };
+    recorder.start();
+    recBtn.textContent = "⏹️ Stop Recording";
+    recBtn.classList.add('muted');
+    appendChat("[⏺️ System] Recording started");
+  } else {
+    recorder.stop();
+    recBtn.textContent = "⏺️ Start Recording";
+    recBtn.classList.remove('muted');
+    appendChat("[⏹️ System] Recording stopped");
+  }
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  appendChat("[🎉 System] Welcome to Mini Meet! Create a room or join an existing one to start your peer-to-peer video conference.");
+});
+
+</script>
+</body>
+</html>
