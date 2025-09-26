@@ -1,0 +1,98 @@
+/* WhiteboardToolbar Styles */
+.whiteboard-toolbar {
+  max-height: 120px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.whiteboard-toolbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.whiteboard-toolbar::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 2px;
+}
+
+.whiteboard-toolbar::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 2px;
+}
+
+.whiteboard-toolbar::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+.toolbar-group {
+  min-width: fit-content;
+}
+
+.toolbar-group h3 {
+  white-space: nowrap;
+}
+
+/* Responsive design for smaller screens */
+@media (max-width: 768px) {
+  .whiteboard-toolbar {
+    padding: 8px;
+    gap: 8px;
+  }
+  
+  .toolbar-group {
+    min-width: auto;
+  }
+  
+  .toolbar-group h3 {
+    font-size: 0.75rem;
+    margin-bottom: 4px;
+  }
+  
+  .whiteboard-toolbar button {
+    padding: 4px 8px;
+    font-size: 0.75rem;
+  }
+  
+  .whiteboard-toolbar input[type="range"] {
+    width: 40px;
+  }
+}
+
+/* Color picker animations */
+.color-picker-panel {
+  animation: slideIn 0.2s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Tool button active states */
+.tool-button-active {
+  box-shadow: 0 0 0 2px #3b82f6;
+}
+
+/* Canvas optimizations */
+.whiteboard-canvas {
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}
+
+/* Touch device optimizations */
+@media (hover: none) and (pointer: coarse) {
+  .whiteboard-toolbar button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  .whiteboard-toolbar input[type="range"] {
+    min-height: 44px;
+  }
+}
